@@ -4,6 +4,7 @@ import { cookies } from "next/headers";
 const SESSION_COOKIE = "session";
 const SESSION_TTL_SECONDS = 60 * 60 * 24; // 24h
 
+
 export type SessionUser = {
   sub: string;
   employee_id: string;
@@ -37,15 +38,13 @@ export async function createSession(user: SessionUser) {
   return jwt;
 }
 
-export async function getSession(): Promise<SessionUser | null> {
-  const cookie = cookies().get(SESSION_COOKIE)?.value;
-  if (!cookie) return null;
-  try {
-    const { payload } = await jwtVerify(cookie, getSecretKey());
-    return payload as unknown as SessionUser;
-  } catch {
-    return null;
-  }
+export type Session = { id: string; role: "ADMIN"|"STAFF"|"ATTENDEE"; name: string; email: string };
+
+export function getSession(): Session | null {
+  const raw = cookies().get("session")?.value;
+  if (!raw) return null;
+  try { return JSON.parse(raw) as Session; }
+  catch { return null; }
 }
 
 export async function clearSession() {
