@@ -38,8 +38,10 @@ export async function POST(req: NextRequest) {
       sub: attendee.id,
       employee_id: attendee.employee_id,
       email: attendee.email,
-      role: attendee.role
+      role: attendee.role.toLowerCase() as "attendee"|"staff"|"admin",
+      name: attendee.name,
     });
+
 
     // Fix: your Prisma enum is likely UPPERCASE (ADMIN/STAFF/ATTENDEE)
     const role = String(attendee.role).toUpperCase();
