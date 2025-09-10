@@ -1,0 +1,5 @@
+﻿employee_id,email,name,role
+530366,danielariel@dbs.com,Daniel Ariel,ADMIN
+111000,admin@dbs.com,Global Admin,ADMIN
+112123,staff@dbs.com,Staff User,STAFF
+511511,customer@dbs.com,Customer User,ATTENDEE

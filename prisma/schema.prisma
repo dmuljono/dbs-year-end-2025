@@ -1,0 +1,51 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Attendee {
+  id             String          @id @default(uuid())
+  employee_id    String          @unique
+  email          String
+  name           String
+  role           Role            @default(attendee)
+  quota_indomie  Int             @default(1)
+  quota_beer     Int             @default(3)
+  checked_in     Boolean         @default(false)
+  last_redeem_ts DateTime?
+  created_at     DateTime        @default(now())
+  updated_at     DateTime        @updatedAt
+  redemptions    RedemptionLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+model RedemptionLog {
+  id          String   @id @default(uuid())
+  attendee_id String
+  item        ItemType
+  delta       Int      @default(-1)
+  booth_id    String
+  scanned_by  String
+  ts          DateTime @default(now())
+  attendee    Attendee @relation(fields: [attendee_id], references: [id], onDelete: Cascade)
+
+  @@index([item, ts])
+  @@index([attendee_id, ts])
+}
+
+enum Role {
+  attendee
+  staff
+  admin
+}
+
+enum ItemType {
+  indomie
+  beer
+}
