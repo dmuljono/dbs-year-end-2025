@@ -86,3 +86,70 @@ export async function GET(req: NextRequest) {
     );
   }
 }
+
+export async function POST(req: NextRequest) {
+  try {
+    const session = await getSession();
+    if (!session || session.role !== "admin") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    let body: Partial<{
+      employee_id: string;
+      email: string;
+      name: string;
+      role: "attendee" | "staff" | "admin";
+      quota_indomie: number;
+      quota_beer: number;
+      checked_in: boolean;
+    }>;
+    try {
+      body = await req.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    }
+
+    const employee_id = (body.employee_id ?? "").trim();
+    const email = (body.email ?? "").trim().toLowerCase();
+    const name = (body.name ?? "").trim();
+    if (!employee_id || !email || !name) {
+      return NextResponse.json(
+        { error: "employee_id, email, and name are required" },
+        { status: 400 }
+      );
+    }
+
+    const created = await prisma.attendee.create({
+      data: {
+        employee_id,
+        email,
+        name,
+        role: body.role ?? "attendee",
+        quota_indomie: body.quota_indomie ?? 1,
+        quota_beer: body.quota_beer ?? 0,
+        checked_in: body.checked_in ?? false,
+      },
+      select: {
+        id: true,
+        employee_id: true,
+        email: true,
+        name: true,
+        role: true,
+        quota_indomie: true,
+        quota_beer: true,
+        checked_in: true,
+        last_redeem_ts: true,
+        created_at: true,
+        updated_at: true,
+      },
+    });
+
+    return NextResponse.json({ data: created }, { status: 201, headers: { "Cache-Control": "no-store" } });
+  } catch (err: any) {
+    console.error("[admin/attendees POST] error:", err);
+    return NextResponse.json(
+      { error: "Server error", message: err?.message ?? "Unexpected error" },
+      { status: 500 }
+    );
+  }
+}

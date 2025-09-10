@@ -2,16 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { jwtVerify } from "jose";
 
-const PUBLIC_PATHS = [
-  "/",
-  "/api/auth/login",
-  "/api/health",
-  "/api/db",
-  "/_next",           // static/runtime assets
-  "/favicon.ico",
-  "/robots.txt",
-  "/sitemap.xml",
-];
+const PUBLIC_PATHS = ["/api/auth/login", "/api/health", "/api/db", "/_next", "/favicon.ico", "/"]; 
 
 const ADMIN_PATHS = ["/admin", "/api/admin"];
 

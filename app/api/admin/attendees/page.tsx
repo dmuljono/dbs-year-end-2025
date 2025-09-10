@@ -1,167 +1,212 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 
 type Attendee = {
-  id: string; employee_id: string; email: string; name: string; role: "attendee"|"staff"|"admin";
-  quota_indomie: number; quota_beer: number; checked_in: boolean; last_redeem_ts?: string|null;
+  id: string;
+  employee_id: string;
+  email: string;
+  name: string;
+  role: "attendee" | "staff" | "admin";
+  quota_indomie: number;
+  quota_beer: number;
+  checked_in: boolean;
+  last_redeem_ts: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
+type ListResponse = {
+  data: Attendee[];
+  meta: { total: number; page: number; pageSize: number; totalPages: number; hasNext: boolean; hasPrev: boolean; search: string | null };
+};
+
+const PAGE_SIZE = 20;
+
+async function safeJson(res: Response): Promise<any | null> {
+  const text = await res.text();
+  if (!text) return null;
+  try { return JSON.parse(text); } catch { return null; }
+}
+
 export default function AdminAttendeesPage() {
-  const [q, setQ] = useState("");
-  const [items, setItems] = useState<Attendee[]>([]);
-  const [nextCursor, setNextCursor] = useState<string|null>(null);
+  const [rows, setRows] = useState<Attendee[]>([]);
+  const [page, setPage] = useState(1);
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
-  const [creating, setCreating] = useState(false);
-  const [createData, setCreateData] = useState({ employee_id:"", email:"", name:"", role:"attendee", quota_indomie:1, quota_beer:3 });
 
-  async function load(cursor?: string) {
+  const fetchRows = useCallback(async () => {
     setLoading(true);
-    const url = new URL("/api/admin/attendees", window.location.origin);
-    if (q) url.searchParams.set("q", q);
-    url.searchParams.set("take", "25");
-    if (cursor) url.searchParams.set("cursor", cursor);
-    const res = await fetch(url.toString(), { cache:"no-store" });
-    if (res.ok) {
-      const data = await res.json();
-      if (cursor) {
-        setItems(prev => [...prev, ...data.items]);
-      } else {
-        setItems(data.items);
-      }
-      setNextCursor(data.nextCursor);
+    const params = new URLSearchParams();
+    params.set("page", String(page));
+    params.set("pageSize", String(PAGE_SIZE));
+    if (search.trim()) params.set("search", search.trim());
+
+    const res = await fetch(`/api/admin/attendees?${params.toString()}`, { cache: "no-store" });
+    if (!res.ok) {
+      const j = await safeJson(res);
+      alert((j && j.error) || `Failed to load: ${res.status}`);
+      setLoading(false);
+      return;
     }
+    const j = (await safeJson(res)) as ListResponse | null;
+    if (!j) {
+      alert("Unexpected response");
+      setLoading(false);
+      return;
+    }
+    setRows(j.data);
+    setTotal(j.meta.total);
+    setTotalPages(j.meta.totalPages);
     setLoading(false);
-  }
+  }, [page, search]);
 
-  useEffect(() => { load(); /* on mount */ }, []);
-  useEffect(() => { const t = setTimeout(()=>load(), 300); return ()=>clearTimeout(t); }, [q]);
+  useEffect(() => { fetchRows(); }, [fetchRows]);
 
-  async function saveRow(id: string, patch: Partial<Attendee>) {
+  const [draft, setDraft] = useState<Record<string, Partial<Attendee>>>({});
+  const getValue = (id: string, key: keyof Attendee) =>
+    (draft[id]?.[key] as any) ?? (rows.find((r) => r.id === id)?.[key] as any);
+  const setValue = (id: string, key: keyof Attendee, val: any) =>
+    setDraft((d) => ({ ...d, [id]: { ...(d[id] || {}), [key]: val } }));
+
+  const saveRow = async (id: string) => {
+    const body = draft[id];
+    if (!body || Object.keys(body).length === 0) return;
+
     const res = await fetch(`/api/admin/attendees/${id}`, {
-      method:"PATCH",
-      headers:{ "Content-Type":"application/json" },
-      body: JSON.stringify(patch),
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
     });
-    if (res.ok) {
-      const updated = await res.json();
-      setItems(list => list.map(x => x.id===id? updated : x));
-    } else {
-      alert("Update failed");
+    if (!res.ok) {
+      const j = await safeJson(res);
+      alert((j && j.error) || `Update failed: ${res.status}`);
+      return;
     }
-  }
+    setDraft((d) => { const nd = { ...d }; delete nd[id]; return nd; });
+    fetchRows();
+  };
 
-  async function delRow(id: string) {
+  const removeRow = async (id: string) => {
     if (!confirm("Delete this attendee?")) return;
-    const res = await fetch(`/api/admin/attendees/${id}`, { method:"DELETE" });
-    if (res.ok) setItems(list => list.filter(x => x.id !== id));
-    else alert("Delete failed");
-  }
+    const res = await fetch(`/api/admin/attendees/${id}`, { method: "DELETE" });
+    if (!res.ok) {
+      const j = await safeJson(res);
+      alert((j && j.error) || `Delete failed: ${res.status}`);
+      return;
+    }
+    fetchRows();
+  };
 
-  async function create() {
-    setCreating(true);
-    const res = await fetch(`/api/admin/attendees`, { method:"POST", headers:{ "Content-Type":"application/json" }, body: JSON.stringify(createData) });
-    setCreating(false);
-    if (res.ok) { setCreateData({ employee_id:"", email:"", name:"", role:"attendee", quota_indomie:1, quota_beer:3 }); load(); }
-    else alert("Create failed");
-  }
+  const [newRow, setNewRow] = useState({
+    employee_id: "",
+    email: "",
+    name: "",
+    role: "attendee" as const,
+    quota_indomie: 1,
+    quota_beer: 0,
+  });
+
+  const addRow = async () => {
+    const res = await fetch(`/api/admin/attendees`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(newRow),
+    });
+    if (!res.ok) {
+      const j = await safeJson(res);
+      alert((j && j.error) || `Create failed: ${res.status}`);
+      return;
+    }
+    setNewRow({ employee_id: "", email: "", name: "", role: "attendee", quota_indomie: 1, quota_beer: 0 });
+    setPage(1);
+    fetchRows();
+  };
 
   return (
-    <main className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-bold mb-4">Attendees</h1>
-
-      <div className="flex gap-2 mb-4">
-        <input
-          value={q} onChange={e=>setQ(e.target.value)}
-          placeholder="Search name/email/employee_id"
-          className="border rounded px-3 py-2 w-full"
-        />
-        <button onClick={()=>load()} className="px-4 py-2 rounded text-white" style={{ backgroundColor:"var(--color-primary)" }}>
-          Search
-        </button>
+    <div className="p-6 space-y-4">
+      <div className="flex items-center gap-4 border-b pb-3">
+        <Link href="/admin" className="text-sm underline">Logs</Link>
+        <span className="text-sm font-semibold">Attendees</span>
       </div>
 
-      {/* Create new */}
-      <div className="border rounded p-4 mb-6">
-        <h2 className="font-semibold mb-2">Add attendee</h2>
-        <div className="grid grid-cols-6 gap-2">
-          <input className="border rounded px-2 py-1" placeholder="employee_id" value={createData.employee_id} onChange={e=>setCreateData(d=>({...d, employee_id:e.target.value}))}/>
-          <input className="border rounded px-2 py-1" placeholder="email" value={createData.email} onChange={e=>setCreateData(d=>({...d, email:e.target.value}))}/>
-          <input className="border rounded px-2 py-1" placeholder="name" value={createData.name} onChange={e=>setCreateData(d=>({...d, name:e.target.value}))}/>
-          <select className="border rounded px-2 py-1" value={createData.role} onChange={e=>setCreateData(d=>({...d, role:e.target.value}))}>
-            <option value="attendee">attendee</option>
-            <option value="staff">staff</option>
-            <option value="admin">admin</option>
-          </select>
-          <input className="border rounded px-2 py-1" type="number" placeholder="indomie" value={createData.quota_indomie} onChange={e=>setCreateData(d=>({...d, quota_indomie:+e.target.value}))}/>
-          <input className="border rounded px-2 py-1" type="number" placeholder="beer" value={createData.quota_beer} onChange={e=>setCreateData(d=>({...d, quota_beer:+e.target.value}))}/>
-        </div>
-        <div className="mt-2">
-          <button disabled={creating} onClick={create} className="px-4 py-2 rounded text-white" style={{ backgroundColor:"var(--color-primary)" }}>
-            {creating ? "Creating..." : "Create"}
-          </button>
-        </div>
+      <div className="flex items-center gap-2">
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search name, email, employee_id" className="border rounded px-3 py-2 w-72" />
+        <button onClick={() => { setPage(1); fetchRows(); }} className="px-3 py-2 rounded bg-black text-white">Search</button>
+        <button onClick={() => { setSearch(""); setPage(1); fetchRows(); }} className="px-3 py-2 rounded border">Clear</button>
+        <div className="ml-auto text-sm text-gray-600">{loading ? "Loading..." : `${total} total`}</div>
       </div>
 
-      {/* Table */}
-      <div className="overflow-x-auto">
-        <table className="min-w-full bg-white rounded shadow">
-          <thead>
-            <tr className="text-left border-b">
-              <th className="p-2">Name</th>
-              <th className="p-2">Email</th>
-              <th className="p-2">Employee ID</th>
-              <th className="p-2">Role</th>
-              <th className="p-2">Indomie</th>
-              <th className="p-2">Beer</th>
-              <th className="p-2">Checked In</th>
-              <th className="p-2 w-32">Actions</th>
+      {/* quick add */}
+      <div className="grid grid-cols-7 gap-2 items-end border rounded p-3">
+        <div><label className="block text-xs mb-1">Employee ID</label>
+          <input className="border rounded px-2 py-1 w-full" value={newRow.employee_id} onChange={(e) => setNewRow({ ...newRow, employee_id: e.target.value })} /></div>
+        <div><label className="block text-xs mb-1">Email</label>
+          <input className="border rounded px-2 py-1 w-full" value={newRow.email} onChange={(e) => setNewRow({ ...newRow, email: e.target.value })} /></div>
+        <div><label className="block text-xs mb-1">Name</label>
+          <input className="border rounded px-2 py-1 w-full" value={newRow.name} onChange={(e) => setNewRow({ ...newRow, name: e.target.value })} /></div>
+        <div><label className="block text-xs mb-1">Role</label>
+          <select className="border rounded px-2 py-1 w-full" value={newRow.role} onChange={(e) => setNewRow({ ...newRow, role: e.target.value as any })}>
+            <option value="attendee">attendee</option><option value="staff">staff</option><option value="admin">admin</option>
+          </select></div>
+        <div><label className="block text-xs mb-1">Indomie</label>
+          <input type="number" className="border rounded px-2 py-1 w-full" value={newRow.quota_indomie} onChange={(e) => setNewRow({ ...newRow, quota_indomie: Number(e.target.value) })} /></div>
+        <div><label className="block text-xs mb-1">Beer</label>
+          <input type="number" className="border rounded px-2 py-1 w-full" value={newRow.quota_beer} onChange={(e) => setNewRow({ ...newRow, quota_beer: Number(e.target.value) })} /></div>
+        <div><button onClick={addRow} className="px-3 py-2 rounded bg-green-600 text-white w-full">Add Attendee</button></div>
+      </div>
+
+      <div className="overflow-x-auto border rounded">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-left p-2">Employee ID</th>
+              <th className="text-left p-2">Email</th>
+              <th className="text-left p-2">Name</th>
+              <th className="text-left p-2">Role</th>
+              <th className="text-left p-2">Indomie</th>
+              <th className="text-left p-2">Beer</th>
+              <th className="text-left p-2">Checked-in</th>
+              <th className="text-left p-2 w-28">Actions</th>
             </tr>
           </thead>
           <tbody>
-            {items.map(a => (
-              <tr key={a.id} className="border-b">
+            {rows.map((r) => (
+              <tr key={r.id} className="border-t">
+                <td className="p-2"><input className="border rounded px-2 py-1 w-36" value={getValue(r.id, "employee_id") ?? ""} onChange={(e) => setValue(r.id, "employee_id", e.target.value)} /></td>
+                <td className="p-2"><input className="border rounded px-2 py-1 w-56" value={getValue(r.id, "email") ?? ""} onChange={(e) => setValue(r.id, "email", e.target.value)} /></td>
+                <td className="p-2"><input className="border rounded px-2 py-1 w-48" value={getValue(r.id, "name") ?? ""} onChange={(e) => setValue(r.id, "name", e.target.value)} /></td>
                 <td className="p-2">
-                  <input className="border rounded px-2 py-1 w-48" defaultValue={a.name} onBlur={e=>saveRow(a.id, { name: e.target.value })}/>
-                </td>
-                <td className="p-2">
-                  <input className="border rounded px-2 py-1 w-56" defaultValue={a.email} onBlur={e=>saveRow(a.id, { email: e.target.value })}/>
-                </td>
-                <td className="p-2">
-                  <input className="border rounded px-2 py-1 w-36" defaultValue={a.employee_id} onBlur={e=>saveRow(a.id, { employee_id: e.target.value })}/>
-                </td>
-                <td className="p-2">
-                  <select className="border rounded px-2 py-1" defaultValue={a.role} onChange={e=>saveRow(a.id, { role: e.target.value as any })}>
-                    <option value="attendee">attendee</option>
-                    <option value="staff">staff</option>
-                    <option value="admin">admin</option>
+                  <select className="border rounded px-2 py-1" value={getValue(r.id, "role") ?? "attendee"} onChange={(e) => setValue(r.id, "role", e.target.value)}>
+                    <option value="attendee">attendee</option><option value="staff">staff</option><option value="admin">admin</option>
                   </select>
                 </td>
+                <td className="p-2"><input type="number" className="border rounded px-2 py-1 w-20" value={getValue(r.id, "quota_indomie") ?? 0} onChange={(e) => setValue(r.id, "quota_indomie", Number(e.target.value))} /></td>
+                <td className="p-2"><input type="number" className="border rounded px-2 py-1 w-20" value={getValue(r.id, "quota_beer") ?? 0} onChange={(e) => setValue(r.id, "quota_beer", Number(e.target.value))} /></td>
+                <td className="p-2"><input type="checkbox" checked={!!getValue(r.id, "checked_in")} onChange={(e) => setValue(r.id, "checked_in", e.target.checked)} /></td>
                 <td className="p-2">
-                  <input className="border rounded px-2 py-1 w-20" type="number" defaultValue={a.quota_indomie} onBlur={e=>saveRow(a.id, { quota_indomie: +e.target.value })}/>
-                </td>
-                <td className="p-2">
-                  <input className="border rounded px-2 py-1 w-20" type="number" defaultValue={a.quota_beer} onBlur={e=>saveRow(a.id, { quota_beer: +e.target.value })}/>
-                </td>
-                <td className="p-2">
-                  <input type="checkbox" defaultChecked={a.checked_in} onChange={e=>saveRow(a.id, { checked_in: e.target.checked })}/>
-                </td>
-                <td className="p-2">
-                  <button className="px-2 py-1 border rounded mr-2" onClick={()=>saveRow(a.id, {})}>Save</button>
-                  <button className="px-2 py-1 border rounded" onClick={()=>delRow(a.id)}>Delete</button>
+                  <div className="flex gap-2">
+                    <button onClick={() => saveRow(r.id)} className="px-2 py-1 border rounded">Save</button>
+                    <button onClick={() => removeRow(r.id)} className="px-2 py-1 border rounded text-red-600">Delete</button>
+                  </div>
                 </td>
               </tr>
             ))}
+            {rows.length === 0 && !loading && (
+              <tr><td className="p-4 text-gray-500" colSpan={8}>No attendees found.</td></tr>
+            )}
           </tbody>
         </table>
-        {nextCursor && (
-          <div className="mt-3">
-            <button className="px-4 py-2 rounded border" onClick={()=>load(nextCursor!)}>Load more</button>
-          </div>
-        )}
       </div>
 
-      {loading && <p className="mt-3 text-gray-500">Loading…</p>}
-    </main>
+      <div className="flex items-center justify-between">
+        <button disabled={page <= 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="px-3 py-2 border rounded disabled:opacity-50">Prev</button>
+        <div className="text-sm text-gray-600">Page {page} / {totalPages}</div>
+        <button disabled={page >= totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="px-3 py-2 border rounded disabled:opacity-50">Next</button>
+      </div>
+    </div>
   );
 }
